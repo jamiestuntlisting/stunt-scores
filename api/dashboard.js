@@ -1,0 +1,170 @@
+const { MongoClient } = require('mongodb');
+
+const MONGODB_URI = process.env.MONGODB_URI;
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || 'stuntadmin2024';
+
+let cachedClient = null;
+
+async function getDb() {
+  if (!cachedClient || !cachedClient.topology?.isConnected()) {
+    cachedClient = new MongoClient(MONGODB_URI);
+    await cachedClient.connect();
+  }
+  return cachedClient.db('stuntschool');
+}
+
+module.exports = async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+
+  // Password check
+  const pw = req.query.password || req.headers['x-dashboard-password'];
+  if (pw !== DASHBOARD_PASSWORD) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const db = await getDb();
+    const users = db.collection('users');
+    const sessions = db.collection('sessions');
+    const scores = db.collection('scores');
+
+    // ---- USERS ----
+    const allUsers = await users.find({}).sort({ lastSeen: -1 }).limit(500).toArray();
+    const totalUsers = await users.countDocuments();
+
+    // Users by day (last 30 days)
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const usersByDay = await users.aggregate([
+      { $match: { firstSeen: { $gte: thirtyDaysAgo } } },
+      { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$firstSeen' } }, count: { $sum: 1 } } },
+      { $sort: { _id: 1 } }
+    ]).toArray();
+
+    // ---- SESSIONS ----
+    const totalSessions = await sessions.countDocuments();
+    const recentSessions = await sessions.find({}).sort({ endedAt: -1 }).limit(100).project({ _id: 0 }).toArray();
+
+    // Sessions by day (last 30 days)
+    const sessionsByDay = await sessions.aggregate([
+      { $match: { startedAt: { $gte: thirtyDaysAgo } } },
+      { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$startedAt' } }, count: { $sum: 1 }, avgDuration: { $avg: '$durationSec' } } },
+      { $sort: { _id: 1 } }
+    ]).toArray();
+
+    // Average session duration
+    const avgDurationResult = await sessions.aggregate([
+      { $group: { _id: null, avg: { $avg: '$durationSec' } } }
+    ]).toArray();
+    const avgSessionDuration = avgDurationResult[0]?.avg || 0;
+
+    // ---- GAME STATS ----
+    // Flatten games array from sessions
+    const gameStats = await sessions.aggregate([
+      { $unwind: '$games' },
+      { $group: {
+        _id: '$games.game',
+        totalPlays: { $sum: 1 },
+        avgDuration: { $avg: '$games.durationSec' },
+        avgScore: { $avg: '$games.score' },
+        avgLevel: { $avg: '$games.highestLevel' },
+        maxScore: { $max: '$games.score' },
+        maxLevel: { $max: '$games.highestLevel' },
+        uniquePlayers: { $addToSet: '$userId' },
+      }},
+      { $project: {
+        _id: 1, totalPlays: 1, avgDuration: 1, avgScore: 1, avgLevel: 1,
+        maxScore: 1, maxLevel: 1, uniquePlayerCount: { $size: '$uniquePlayers' }
+      }},
+      { $sort: { totalPlays: -1 } }
+    ]).toArray();
+
+    // ---- DEVICE BREAKDOWN ----
+    const deviceBreakdown = await sessions.aggregate([
+      { $group: {
+        _id: { mobile: '$device.mobile' },
+        count: { $sum: 1 }
+      }}
+    ]).toArray();
+
+    const browserBreakdown = await sessions.aggregate([
+      { $group: { _id: '$device.browser', count: { $sum: 1 } } },
+      { $sort: { count: -1 } }
+    ]).toArray();
+
+    // ---- LOCATION BREAKDOWN ----
+    const locationBreakdown = await users.aggregate([
+      { $match: { 'location.country': { $exists: true, $ne: 'Unknown' } } },
+      { $group: { _id: { country: '$location.country', city: '$location.city' }, count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 50 }
+    ]).toArray();
+
+    // ---- NPC INTERACTIONS ----
+    const npcStats = await sessions.aggregate([
+      { $project: { npcEntries: { $objectToArray: '$npcs' } } },
+      { $unwind: '$npcEntries' },
+      { $group: { _id: '$npcEntries.k', totalInteractions: { $sum: '$npcEntries.v' }, uniqueSessions: { $sum: 1 } } },
+      { $sort: { totalInteractions: -1 } }
+    ]).toArray();
+
+    // ---- SCORES (from existing scores collection) ----
+    const VALID_GAMES = ['stairfalls', 'fireburns', 'highfalls', 'stuntcoord'];
+    const topScores = {};
+    for (const game of VALID_GAMES) {
+      topScores[game] = await scores.find({ game }).sort({ score: -1 }).limit(10).project({ _id: 0 }).toArray();
+    }
+
+    // ---- ACTIVE TODAY ----
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const activeToday = await sessions.countDocuments({ endedAt: { $gte: todayStart } });
+
+    return res.json({
+      overview: {
+        totalUsers,
+        totalSessions,
+        activeToday,
+        avgSessionDuration: Math.round(avgSessionDuration),
+      },
+      usersByDay,
+      sessionsByDay,
+      users: allUsers.map(u => ({
+        userId: u.userId,
+        firstName: u.firstName,
+        lastName: u.lastName,
+        firstSeen: u.firstSeen,
+        lastSeen: u.lastSeen,
+        visits: u.visits,
+        location: u.location,
+        devices: (u.devices || []).map(d => ({ mobile: d.mobile, browser: d.browser, screenW: d.screenW, screenH: d.screenH })),
+      })),
+      gameStats,
+      deviceBreakdown: {
+        mobile: deviceBreakdown.find(d => d._id?.mobile === true)?.count || 0,
+        desktop: deviceBreakdown.find(d => d._id?.mobile === false)?.count || 0,
+      },
+      browserBreakdown: browserBreakdown.map(b => ({ browser: b._id || 'Unknown', count: b.count })),
+      locationBreakdown: locationBreakdown.map(l => ({ country: l._id.country, city: l._id.city, count: l.count })),
+      npcStats: npcStats.map(n => ({ npc: n._id, totalInteractions: n.totalInteractions, uniqueSessions: n.uniqueSessions })),
+      topScores,
+      recentSessions: recentSessions.slice(0, 50).map(s => ({
+        sessionId: s.sessionId,
+        userId: s.userId,
+        startedAt: s.startedAt,
+        endedAt: s.endedAt,
+        durationSec: s.durationSec,
+        device: s.device,
+        games: s.games,
+        npcs: s.npcs,
+      })),
+    });
+  } catch (err) {
+    console.error('Dashboard error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
