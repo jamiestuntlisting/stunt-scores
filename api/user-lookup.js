@@ -9,7 +9,7 @@ function getPool() {
       port: 3306,
       user: 'stuntlistinggames',
       password: 'xihre0-cotmeg-depsyK',
-      database: 'stuntlisting',
+      database: 'db',
       connectionLimit: 5,
       connectTimeout: 5000,
       waitForConnections: true,
@@ -35,7 +35,7 @@ module.exports = async function handler(req, res) {
   try {
     const db = getPool();
     const [rows] = await db.execute(
-      'SELECT first_name, last_name FROM users WHERE id = ? LIMIT 1',
+      'SELECT first_name, last_name FROM user WHERE id = ? LIMIT 1',
       [Number(id)]
     );
 
