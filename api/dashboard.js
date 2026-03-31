@@ -119,6 +119,37 @@ module.exports = async function handler(req, res) {
       topScores[game] = await scores.find({ game }).sort({ score: -1 }).limit(10).project({ _id: 0 }).toArray();
     }
 
+    // ---- PER-USER STATS ----
+    const userStats = await sessions.aggregate([
+      { $addFields: { gameCount: { $size: { $ifNull: ['$games', []] } } } },
+      { $unwind: { path: '$games', preserveNullAndEmptyArrays: true } },
+      { $group: {
+        _id: { userId: '$userId', sessionId: '$sessionId' },
+        durationSec: { $first: '$durationSec' },
+        gameName: { $push: '$games.game' },
+      }},
+      { $group: {
+        _id: '$_id.userId',
+        totalPlayTime: { $sum: '$durationSec' },
+        gameNames: { $push: '$gameName' },
+      }},
+    ]).toArray();
+
+    // Flatten and compute per-user game breakdown
+    const userStatsMap = userStats.map(u => {
+      const allGames = u.gameNames.flat().filter(Boolean);
+      const breakdown = {};
+      for (const g of allGames) {
+        breakdown[g] = (breakdown[g] || 0) + 1;
+      }
+      return {
+        userId: u._id,
+        totalPlayTime: u.totalPlayTime || 0,
+        gamesPlayed: allGames.length,
+        gameBreakdown: breakdown,
+      };
+    });
+
     // ---- ACTIVE TODAY ----
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
@@ -151,6 +182,7 @@ module.exports = async function handler(req, res) {
       browserBreakdown: browserBreakdown.map(b => ({ browser: b._id || 'Unknown', count: b.count })),
       locationBreakdown: locationBreakdown.map(l => ({ country: l._id.country, city: l._id.city, count: l.count })),
       npcStats: npcStats.map(n => ({ npc: n._id, totalInteractions: n.totalInteractions, uniqueSessions: n.uniqueSessions })),
+      userStats: userStatsMap,
       topScores,
       recentSessions: recentSessions.slice(0, 50).map(s => ({
         sessionId: s.sessionId,
