@@ -122,34 +122,38 @@ module.exports = async function handler(req, res) {
       topScores[game] = await scores.find({ game }).sort({ score: -1 }).limit(10).project({ _id: 0 }).toArray();
     }
 
-    // ---- PER-USER STATS ----
+    // ---- PER-USER STATS (games + NPC interactions) ----
     const userStats = await sessions.aggregate([
       { $addFields: { gameCount: { $size: { $ifNull: ['$games', []] } } } },
-      { $unwind: { path: '$games', preserveNullAndEmptyArrays: true } },
       { $group: {
-        _id: { userId: '$userId', sessionId: '$sessionId' },
-        durationSec: { $first: '$durationSec' },
-        gameName: { $push: '$games.game' },
-      }},
-      { $group: {
-        _id: '$_id.userId',
+        _id: '$userId',
         totalPlayTime: { $sum: '$durationSec' },
-        gameNames: { $push: '$gameName' },
+        allGames: { $push: '$games' },
+        allNpcs: { $push: '$npcs' },
       }},
     ]).toArray();
 
-    // Flatten and compute per-user game breakdown
+    // Flatten and compute per-user game + NPC breakdown
     const userStatsMap = userStats.map(u => {
-      const allGames = u.gameNames.flat().filter(Boolean);
-      const breakdown = {};
+      const allGames = (u.allGames || []).flat().filter(Boolean).map(g => g.game).filter(Boolean);
+      const gameBreakdown = {};
       for (const g of allGames) {
-        breakdown[g] = (breakdown[g] || 0) + 1;
+        gameBreakdown[g] = (gameBreakdown[g] || 0) + 1;
+      }
+      // Merge NPC interactions across all sessions
+      const npcBreakdown = {};
+      for (const npcObj of (u.allNpcs || [])) {
+        if (!npcObj) continue;
+        for (const [name, count] of Object.entries(npcObj)) {
+          npcBreakdown[name] = (npcBreakdown[name] || 0) + count;
+        }
       }
       return {
         userId: u._id,
         totalPlayTime: u.totalPlayTime || 0,
         gamesPlayed: allGames.length,
-        gameBreakdown: breakdown,
+        gameBreakdown,
+        npcBreakdown,
       };
     });
 
