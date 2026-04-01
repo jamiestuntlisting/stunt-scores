@@ -37,7 +37,7 @@ module.exports = async function handler(req, res) {
     const scores = db.collection('scores');
 
     // Always exclude known test/spam accounts
-    const alwaysExclude = ['6500', '144516', '498001', '<< Test STL Id >>'];
+    const alwaysExclude = ['6500', '144516', '498001', '3345', '<< Test STL Id >>'];
     // Optional additional excludes (comma-separated user IDs)
     const extraExclude = (req.query.exclude || '').split(',').map(s => s.trim()).filter(Boolean);
     const excludeIds = [...new Set([...alwaysExclude, ...extraExclude])];
