@@ -129,6 +129,21 @@ module.exports = async function handler(req, res) {
       { $sort: { totalInteractions: -1 } }
     ]).toArray();
 
+    // ---- CRASH STATS (stairfalls ladder crashes) ----
+    const crashStats = await sessions.aggregate([
+      { $match: { ...sessionFilter, 'crashes.total': { $gt: 0 } } },
+      { $group: {
+        _id: null,
+        totalCrashes: { $sum: '$crashes.total' },
+        sessionsWithCrashes: { $sum: 1 },
+        tier1: { $sum: { $ifNull: ['$crashes.byTier.1', 0] } },
+        tier2: { $sum: { $ifNull: ['$crashes.byTier.2', 0] } },
+        tier3: { $sum: { $ifNull: ['$crashes.byTier.3', 0] } },
+        tier4: { $sum: { $ifNull: ['$crashes.byTier.4', 0] } },
+        tier5: { $sum: { $ifNull: ['$crashes.byTier.5', 0] } },
+      }}
+    ]).toArray();
+
     // ---- SCORES (from existing scores collection) ----
     const VALID_GAMES = ['stairfalls', 'fireburns', 'highfalls', 'stuntcoord'];
     const scoreFilter = excludeIds.length > 0 ? { userId: { $nin: excludeIds } } : {};
@@ -219,6 +234,7 @@ module.exports = async function handler(req, res) {
       browserBreakdown: browserBreakdown.map(b => ({ browser: b._id || 'Unknown', count: b.count })),
       locationBreakdown: locationBreakdown.map(l => ({ country: l._id.country, region: l._id.region, count: l.count })),
       npcStats: npcStats.map(n => ({ npc: n._id, totalInteractions: n.totalInteractions, uniqueSessions: n.uniqueSessions })),
+      crashStats: crashStats[0] || { totalCrashes: 0, sessionsWithCrashes: 0, tier1: 0, tier2: 0, tier3: 0, tier4: 0, tier5: 0 },
       userStats: userStatsMap,
       topScores,
       recentSessions: recentSessions.slice(0, 50).map(s => ({

@@ -128,7 +128,7 @@ module.exports = async function handler(req, res) {
 
     // ---- HEARTBEAT ----
     if (action === 'heartbeat') {
-      const { userId, sessionId, startedAt, device, games, npcs } = req.body;
+      const { userId, sessionId, startedAt, device, games, npcs, crashes } = req.body;
       if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
 
       const sessions = db.collection('sessions');
@@ -161,6 +161,7 @@ module.exports = async function handler(req, res) {
             device: deviceInfo,
             games: Array.isArray(games) ? games.slice(0, 50) : [],
             npcs: (npcs && typeof npcs === 'object') ? npcs : {},
+            crashes: (crashes && typeof crashes === 'object') ? crashes : { total: 0, byTier: {} },
             ip: ip.slice(0, 45),
           },
           $setOnInsert: { createdAt: now },
