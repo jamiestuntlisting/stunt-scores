@@ -39,16 +39,24 @@ module.exports = async function handler(req, res) {
     await scores.createIndex({ game: 1, userId: 1 }, { unique: true });
     await scores.createIndex({ game: 1, score: -1 });
 
-    // GET: Return top 10 scores for all games
+    // GET: Return top 10 scores for all games (deduplicated by userId)
     if (req.method === 'GET') {
       const result = {};
       for (const game of VALID_GAMES) {
-        result[game] = await scores
-          .find({ game })
-          .sort({ score: -1 })
-          .limit(10)
-          .project({ _id: 0, name: 1, score: 1, userId: 1 })
-          .toArray();
+        // Use aggregation to keep only the highest score per userId
+        result[game] = await scores.aggregate([
+          { $match: { game } },
+          { $sort: { score: -1 } },
+          { $group: {
+            _id: '$userId',
+            name: { $first: '$name' },
+            score: { $first: '$score' },
+            userId: { $first: '$userId' }
+          }},
+          { $sort: { score: -1 } },
+          { $limit: 10 },
+          { $project: { _id: 0, name: 1, score: 1, userId: 1 } }
+        ]).toArray();
       }
       return res.json(result);
     }
