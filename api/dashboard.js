@@ -36,38 +36,47 @@ module.exports = async function handler(req, res) {
     const sessions = db.collection('sessions');
     const scores = db.collection('scores');
 
-    // ---- USERS ----
+    // Always exclude known test/spam accounts
+    const alwaysExclude = ['6500'];
+    // Optional additional excludes (comma-separated user IDs)
+    const extraExclude = (req.query.exclude || '').split(',').map(s => s.trim()).filter(Boolean);
+    const excludeIds = [...new Set([...alwaysExclude, ...extraExclude])];
+    const sessionFilter = excludeIds.length > 0 ? { userId: { $nin: excludeIds } } : {};
+    const userFilter = excludeIds.length > 0 ? { userId: { $nin: excludeIds } } : {};
+
+    // ---- USERS (always return all users — filtering is cosmetic on the client) ----
     const allUsers = await users.find({}).sort({ lastSeen: -1 }).limit(500).toArray();
-    const totalUsers = await users.countDocuments();
+    const totalUsers = await users.countDocuments(userFilter);
 
     // Users by day (last 30 days)
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const usersByDay = await users.aggregate([
-      { $match: { firstSeen: { $gte: thirtyDaysAgo } } },
+      { $match: { ...userFilter, firstSeen: { $gte: thirtyDaysAgo } } },
       { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$firstSeen' } }, count: { $sum: 1 } } },
       { $sort: { _id: 1 } }
     ]).toArray();
 
     // ---- SESSIONS ----
-    const totalSessions = await sessions.countDocuments();
-    const recentSessions = await sessions.find({}).sort({ endedAt: -1 }).limit(100).project({ _id: 0 }).toArray();
+    const totalSessions = await sessions.countDocuments(sessionFilter);
+    const recentSessions = await sessions.find(sessionFilter).sort({ endedAt: -1 }).limit(100).project({ _id: 0 }).toArray();
 
     // Sessions by day (last 30 days)
     const sessionsByDay = await sessions.aggregate([
-      { $match: { startedAt: { $gte: thirtyDaysAgo } } },
+      { $match: { ...sessionFilter, startedAt: { $gte: thirtyDaysAgo } } },
       { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$startedAt' } }, count: { $sum: 1 }, avgDuration: { $avg: '$durationSec' } } },
       { $sort: { _id: 1 } }
     ]).toArray();
 
     // Average session duration
     const avgDurationResult = await sessions.aggregate([
+      { $match: sessionFilter },
       { $group: { _id: null, avg: { $avg: '$durationSec' } } }
     ]).toArray();
     const avgSessionDuration = avgDurationResult[0]?.avg || 0;
 
     // ---- GAME STATS ----
-    // Flatten games array from sessions
     const gameStats = await sessions.aggregate([
+      { $match: sessionFilter },
       { $unwind: '$games' },
       { $group: {
         _id: '$games.game',
@@ -88,6 +97,7 @@ module.exports = async function handler(req, res) {
 
     // ---- DEVICE BREAKDOWN ----
     const deviceBreakdown = await sessions.aggregate([
+      { $match: sessionFilter },
       { $group: {
         _id: { mobile: '$device.mobile' },
         count: { $sum: 1 }
@@ -95,13 +105,14 @@ module.exports = async function handler(req, res) {
     ]).toArray();
 
     const browserBreakdown = await sessions.aggregate([
+      { $match: sessionFilter },
       { $group: { _id: '$device.browser', count: { $sum: 1 } } },
       { $sort: { count: -1 } }
     ]).toArray();
 
     // ---- LOCATION BREAKDOWN (by state/region) ----
     const locationBreakdown = await users.aggregate([
-      { $match: { 'location.country': { $exists: true, $ne: 'Unknown' } } },
+      { $match: { ...userFilter, 'location.country': { $exists: true, $ne: 'Unknown' } } },
       { $group: { _id: { country: '$location.country', region: '$location.region' }, count: { $sum: 1 } } },
       { $sort: { count: -1 } },
       { $limit: 50 }
@@ -109,6 +120,7 @@ module.exports = async function handler(req, res) {
 
     // ---- NPC INTERACTIONS ----
     const npcStats = await sessions.aggregate([
+      { $match: sessionFilter },
       { $project: { npcEntries: { $objectToArray: '$npcs' } } },
       { $unwind: '$npcEntries' },
       { $group: { _id: '$npcEntries.k', totalInteractions: { $sum: '$npcEntries.v' }, uniqueSessions: { $sum: 1 } } },
@@ -117,14 +129,15 @@ module.exports = async function handler(req, res) {
 
     // ---- SCORES (from existing scores collection) ----
     const VALID_GAMES = ['stairfalls', 'fireburns', 'highfalls', 'stuntcoord'];
+    const scoreFilter = excludeIds.length > 0 ? { userId: { $nin: excludeIds } } : {};
     const topScores = {};
     for (const game of VALID_GAMES) {
-      topScores[game] = await scores.find({ game }).sort({ score: -1 }).limit(10).project({ _id: 0 }).toArray();
+      topScores[game] = await scores.find({ game, ...scoreFilter }).sort({ score: -1 }).limit(10).project({ _id: 0 }).toArray();
     }
 
     // ---- PER-USER STATS (games + NPC interactions) ----
     const userStats = await sessions.aggregate([
-      { $addFields: { gameCount: { $size: { $ifNull: ['$games', []] } } } },
+      { $match: sessionFilter },
       { $group: {
         _id: '$userId',
         totalPlayTime: { $sum: '$durationSec' },
@@ -140,7 +153,6 @@ module.exports = async function handler(req, res) {
       for (const g of allGames) {
         gameBreakdown[g] = (gameBreakdown[g] || 0) + 1;
       }
-      // Merge NPC interactions across all sessions
       const npcBreakdown = {};
       for (const npcObj of (u.allNpcs || [])) {
         if (!npcObj) continue;
@@ -160,7 +172,7 @@ module.exports = async function handler(req, res) {
     // ---- ACTIVE TODAY ----
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
-    const activeToday = await sessions.countDocuments({ endedAt: { $gte: todayStart } });
+    const activeToday = await sessions.countDocuments({ ...sessionFilter, endedAt: { $gte: todayStart } });
 
     return res.json({
       overview: {
