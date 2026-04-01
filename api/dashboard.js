@@ -171,6 +171,22 @@ module.exports = async function handler(req, res) {
       };
     });
 
+    // ---- SESSION-ONLY USERS (have sessions but no user record) ----
+    const registeredIds = new Set(allUsers.map(u => u.userId));
+    const sessionUserIds = await sessions.distinct('userId', sessionFilter);
+    const sessionOnlyUsers = sessionUserIds
+      .filter(id => id && id !== 'anonymous' && !registeredIds.has(id) && !alwaysExclude.includes(id))
+      .map(id => ({
+        userId: id,
+        firstName: '',
+        lastName: '',
+        firstSeen: null,
+        lastSeen: null,
+        visits: 0,
+        location: null,
+        devices: [],
+      }));
+
     // ---- ACTIVE TODAY ----
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
@@ -185,7 +201,7 @@ module.exports = async function handler(req, res) {
       },
       usersByDay,
       sessionsByDay,
-      users: allUsers.map(u => ({
+      users: [...allUsers.map(u => ({
         userId: u.userId,
         firstName: u.firstName,
         lastName: u.lastName,
@@ -194,7 +210,7 @@ module.exports = async function handler(req, res) {
         visits: u.visits,
         location: u.location,
         devices: (u.devices || []).map(d => ({ mobile: d.mobile, browser: d.browser, screenW: d.screenW, screenH: d.screenH })),
-      })),
+      })), ...sessionOnlyUsers],
       gameStats,
       deviceBreakdown: {
         mobile: deviceBreakdown.find(d => d._id?.mobile === true)?.count || 0,
