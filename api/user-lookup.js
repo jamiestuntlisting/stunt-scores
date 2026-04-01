@@ -30,8 +30,10 @@ module.exports = async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  const id = req.query.id;
-  if (!id || isNaN(Number(id))) {
+  // Strip non-numeric chars (Mailchimp adds periods/commas to IDs)
+  const rawId = (req.query.id || '').replace(/[^0-9]/g, '');
+  const id = rawId ? Number(rawId) : NaN;
+  if (!rawId || isNaN(id)) {
     return res.status(400).json({ error: 'Valid numeric id is required' });
   }
 
@@ -39,16 +41,16 @@ module.exports = async function handler(req, res) {
     const db = getPool();
     const [rows] = await db.execute(
       'SELECT first_name, last_name FROM user WHERE id = ? LIMIT 1',
-      [Number(id)]
+      [id]
     );
 
     if (rows.length === 0) {
-      return res.json({ found: false, id: Number(id) });
+      return res.json({ found: false, id });
     }
 
     return res.json({
       found: true,
-      id: Number(id),
+      id,
       first_name: rows[0].first_name || '',
       last_name: rows[0].last_name || '',
     });
