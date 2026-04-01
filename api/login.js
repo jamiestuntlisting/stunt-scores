@@ -11,7 +11,7 @@ function getPool() {
       user: 'stuntlistinggames',
       password: 'xihre0-cotmeg-depsyK',
       database: 'db',
-      connectionLimit: 5,
+      connectionLimit: 20,
       connectTimeout: 5000,
       waitForConnections: true,
     });
