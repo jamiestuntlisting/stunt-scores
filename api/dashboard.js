@@ -99,10 +99,10 @@ module.exports = async function handler(req, res) {
       { $sort: { count: -1 } }
     ]).toArray();
 
-    // ---- LOCATION BREAKDOWN ----
+    // ---- LOCATION BREAKDOWN (by state/region) ----
     const locationBreakdown = await users.aggregate([
       { $match: { 'location.country': { $exists: true, $ne: 'Unknown' } } },
-      { $group: { _id: { country: '$location.country', city: '$location.city' }, count: { $sum: 1 } } },
+      { $group: { _id: { country: '$location.country', region: '$location.region' }, count: { $sum: 1 } } },
       { $sort: { count: -1 } },
       { $limit: 50 }
     ]).toArray();
@@ -187,7 +187,7 @@ module.exports = async function handler(req, res) {
         desktop: deviceBreakdown.find(d => d._id?.mobile === false)?.count || 0,
       },
       browserBreakdown: browserBreakdown.map(b => ({ browser: b._id || 'Unknown', count: b.count })),
-      locationBreakdown: locationBreakdown.map(l => ({ country: l._id.country, city: l._id.city, count: l.count })),
+      locationBreakdown: locationBreakdown.map(l => ({ country: l._id.country, region: l._id.region, count: l.count })),
       npcStats: npcStats.map(n => ({ npc: n._id, totalInteractions: n.totalInteractions, uniqueSessions: n.uniqueSessions })),
       userStats: userStatsMap,
       topScores,
