@@ -37,15 +37,17 @@ module.exports = async function handler(req, res) {
     const scores = db.collection('scores');
 
     // Always exclude known test/spam accounts
-    const alwaysExclude = ['6500'];
+    const alwaysExclude = ['6500', '144516', '498001', '<< Test STL Id >>'];
     // Optional additional excludes (comma-separated user IDs)
     const extraExclude = (req.query.exclude || '').split(',').map(s => s.trim()).filter(Boolean);
     const excludeIds = [...new Set([...alwaysExclude, ...extraExclude])];
     const sessionFilter = excludeIds.length > 0 ? { userId: { $nin: excludeIds } } : {};
     const userFilter = excludeIds.length > 0 ? { userId: { $nin: excludeIds } } : {};
 
-    // ---- USERS (always return all users — filtering is cosmetic on the client) ----
-    const allUsers = await users.find({}).sort({ lastSeen: -1 }).limit(500).toArray();
+    // ---- USERS ----
+    // Always hide permanently excluded accounts; dev toggle (id 33) still shows in users list
+    const alwaysExcludeFilter = alwaysExclude.length > 0 ? { userId: { $nin: alwaysExclude } } : {};
+    const allUsers = await users.find(alwaysExcludeFilter).sort({ lastSeen: -1 }).limit(500).toArray();
     const totalUsers = await users.countDocuments(userFilter);
 
     // Users by day (last 30 days)
